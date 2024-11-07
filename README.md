@@ -95,11 +95,11 @@ For more details, see our [Contributing Guidelines](tbd guidelines).
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE.md) file for details.
 
 ## Contact
 
-For questions or feedback, please reach out through GitHub issues or contact the ChainLink team at [email@example.com](mailto:email@example.com).
+For questions or feedback, please reach out through GitHub issues or contact the ChainLink team at [email@example.com](mailto:rrizzo@nd.edu).
 
 ---
 
