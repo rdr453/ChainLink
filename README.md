@@ -91,7 +91,7 @@ We welcome contributions to ChainLink. To get started:
    ```
 5. Open a pull request on the main repository.
 
-For more details, see our [Contributing Guidelines](https://your-website-link/contribute).
+For more details, see our [Contributing Guidelines](tbd guidelines).
 
 ## License
 
