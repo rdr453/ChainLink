@@ -32,11 +32,11 @@ ChainLink was inspired by the need to streamline AI collaboration processes. Bui
 2. **Using Docker**:
    - Build the Docker image:
      ```bash
-     docker build -t chainlink .
+     docker build -t chainforge .
      ```
    - Run the Docker container:
      ```bash
-     docker run -p 8000:8000 chainlink
+     docker run -p 8000:8000 chainforge
      ```
    - Open your browser and navigate to `http://localhost:8000`.
 
@@ -47,7 +47,7 @@ ChainLink was inspired by the need to streamline AI collaboration processes. Bui
      ```
    - Serve ChainLink:
      ```bash
-     chainlink serve
+     chainforge serve
      ```
    - Open your browser and navigate to `http://localhost:8000`.
 
