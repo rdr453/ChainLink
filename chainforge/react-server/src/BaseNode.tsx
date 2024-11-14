@@ -137,3 +137,18 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
 };
 
 export default BaseNode;
+
+import BreakpointToggle from "./BreakpointToggle";
+
+// Inside the BaseNode component, add the following code to render the BreakpointToggle:
+const handleToggleBreakpoint = (state: boolean) => {
+  console.log("Breakpoint toggled:", state);
+  // Logic to manage breakpoints can be added here
+};
+
+return (
+  <div>
+    {/* Existing node rendering logic */}
+    <BreakpointToggle onToggle={handleToggleBreakpoint} />
+  </div>
+);
