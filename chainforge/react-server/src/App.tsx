@@ -5,7 +5,7 @@ import React, {
   useEffect,
   useContext,
 } from "react";
-import ReactFlow, { Controls, Background, ReactFlowInstance } from "reactflow";
+import ReactFlow, { Controls, Background, ReactFlowInstance, getIncomers, getOutgoers } from "reactflow";
 import {
   Button,
   Menu,
@@ -30,6 +30,8 @@ import {
   IconArrowsSplit,
   IconForms,
   IconAbacus,
+  IconPlayerPlay,
+  IconPlayerPlayFilled,
 } from "@tabler/icons-react";
 import RemoveEdge from "./RemoveEdge";
 import TextFieldsNode from "./TextFieldsNode"; // Import a custom node
@@ -44,6 +46,7 @@ import TabularDataNode from "./TabularDataNode";
 import JoinNode from "./JoinNode";
 import SplitNode from "./SplitNode";
 import CommentNode from "./CommentNode";
+import BreakpointNode from "./BreakpointNode";
 import GlobalSettingsModal, {
   GlobalSettingsModalRef,
 } from "./GlobalSettingsModal";
@@ -169,6 +172,7 @@ const nodeTypes = {
   join: JoinNode,
   split: SplitNode,
   processor: CodeEvaluatorNode,
+  breakpoint: BreakpointNode,
 };
 
 const edgeTypes = {
@@ -330,6 +334,7 @@ const App = () => {
   const addItemsNode = () => addNode("csvNode", "csv");
   const addTabularDataNode = () => addNode("table");
   const addCommentNode = () => addNode("comment");
+  const addBreakpointNode = () => addNode("breakpointNode", "breakpoint");
   const addLLMEvalNode = () => addNode("llmeval");
   const addMultiEvalNode = () => addNode("multieval");
   const addJoinNode = () => addNode("join");
@@ -860,6 +865,109 @@ const App = () => {
     };
   }, []);
 
+  const [pipelinePaused, setPipelinePaused] = useState(false);
+
+  const getPipelineNodes = () => {
+    if (!rfInstance) return [];
+    
+    // Get nodes without incoming edges (start nodes)
+    const startNodes = nodes.filter(node => 
+      getIncomers(node, nodes, edges).length === 0
+    );
+
+    // Implement topological sort using DFS
+    const visited = new Set<string>();
+    const sorted: typeof nodes = [];
+    
+    const visit = (node: typeof nodes[0]) => {
+      if (visited.has(node.id)) return;
+      visited.add(node.id);
+      
+      // Visit all outgoing nodes first
+      const outgoers = getOutgoers(node, nodes, edges);
+      for (const child of outgoers) {
+        visit(child);
+      }
+      
+      // Add current node after all dependencies
+      sorted.unshift(node);
+    };
+
+    // Start DFS from each start node
+    for (const node of startNodes) {
+      visit(node);
+    }
+
+    return sorted;
+  };
+
+  const executeNode = async (node: typeof nodes[0]) => {
+    console.log(`Executing node: ${node.id} (type: ${node.type})`);
+    
+    try {
+      switch (node.type) {
+        case 'prompt':
+        case 'chat':
+          const promptRef = node.data.ref?.current;
+          if (promptRef) {
+            return await promptRef.run();
+          }
+          break;
+          
+        case 'evaluator':
+        case 'processor':
+          const evalRef = node.data.ref?.current;
+          if (evalRef) {
+            return await evalRef.run(node.data.inputs || []);
+          }
+          break;
+          
+        case 'multieval':
+          const multiRef = node.data.ref?.current;
+          if (multiRef) {
+            return await multiRef.run(node.data.inputs || []);
+          }
+          break;
+          
+        case 'simpleval':
+          const simpleRef = node.data.ref?.current;
+          if (simpleRef) {
+            return await simpleRef.run();
+          }
+          break;
+
+        case 'breakpoint':
+          console.log('Pipeline paused at breakpoint');
+          setPipelinePaused(true);
+          break;
+
+        default:
+          // For nodes that don't need execution (like TextFields)
+          return;
+      }
+    } catch (error: any) {
+      console.error(`Error executing node ${node.id}:`, error);
+      setPipelinePaused(true);
+      if (showAlert) showAlert(`Error in node ${node.id}: ${error.message}`);
+    }
+  };
+
+  const executePipeline = async () => {
+    const pipelineNodes = getPipelineNodes();
+    for (const node of pipelineNodes) {
+      if (node.type === "breakpoint") {
+        setPipelinePaused(true);
+        break;
+      }
+      await executeNode(node);
+    }
+  };
+
+  const resumePipeline = () => {
+    setPipelinePaused(false);
+    executePipeline();
+  };
+
   if (!IS_ACCEPTED_BROWSER) {
     return (
       <Box maw={600} mx="auto" mt="40px">
@@ -1142,8 +1250,41 @@ const App = () => {
               ) : (
                 <></>
               )}
+              <MenuTooltip label="Pause the pipeline execution at this point.">
+                <Menu.Item onClick={addBreakpointNode} icon={"⏸️"}>
+                  {" "}
+                  Breakpoint Node{" "}
+                </Menu.Item>
+              </MenuTooltip>
             </Menu.Dropdown>
           </Menu>
+          <Button
+            onClick={() => executePipeline()}
+            size="sm"
+            variant="filled"
+            color="green"
+            compact
+            mr="xs"
+            leftIcon={<IconPlayerPlay size={16} />}
+            disabled={pipelinePaused}
+          >
+            Run Pipeline
+          </Button>
+
+          {pipelinePaused && (
+            <Button
+              onClick={() => resumePipeline()}
+              size="sm"
+              variant="filled"
+              color="blue"
+              compact
+              mr="xs"
+              leftIcon={<IconPlayerPlayFilled size={16} />}
+            >
+              Resume
+            </Button>
+          )}
+          
           <Button
             onClick={exportFlow}
             size="sm"

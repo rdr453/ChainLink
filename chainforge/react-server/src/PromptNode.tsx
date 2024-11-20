@@ -5,8 +5,11 @@ import React, {
   useCallback,
   useMemo,
   useContext,
+  forwardRef,
+  useImperativeHandle,
+  createRef,
 } from "react";
-import { Handle, Position } from "reactflow";
+import { Handle, Position, getIncomers } from "reactflow";
 import { v4 as uuid } from "uuid";
 import {
   Switch,
@@ -61,6 +64,7 @@ import {
   generatePrompts,
   grabResponses,
   queryLLM,
+  executePrompt,
 } from "./backend/backend";
 
 const getUniqueLLMMetavarKey = (responses: LLMResponse[]) => {
@@ -186,23 +190,30 @@ export interface PromptNodeProps {
     contChat: boolean;
     refresh: boolean;
     refreshLLMList: boolean;
+    ref?: React.RefObject<PromptNodeRef>;
   };
   id: string;
   type: string;
 }
 
-const PromptNode: React.FC<PromptNodeProps> = ({
-  data,
-  id,
-  type: node_type,
-}) => {
+export interface PromptNodeRef {
+  run: () => Promise<any>;
+}
+
+const formatPromptWithInputs = (promptTemplate: string, inputValues: any[]) => {
+  return inputValues.reduce((prompt, value, index) => {
+    return prompt.replace(`{${index}}`, value?.toString() || '');
+  }, promptTemplate);
+};
+
+const PromptNode = forwardRef<PromptNodeRef, PromptNodeProps>((props, ref) => {
   const node_icon = useMemo(
-    () => (node_type === "chat" ? "🗣" : "💬"),
-    [node_type],
+    () => (props.type === "chat" ? "🗣" : "💬"),
+    [props.type],
   );
   const node_default_title = useMemo(
-    () => (node_type === "chat" ? "Chat Turn" : "Prompt Node"),
-    [node_type],
+    () => (props.type === "chat" ? "Chat Turn" : "Prompt Node"),
+    [props.type],
   );
 
   // Get state from the Zustand store:
@@ -221,15 +232,15 @@ const PromptNode: React.FC<PromptNodeProps> = ({
   const [jsonResponses, setJSONResponses] = useState<LLMResponse[] | null>(
     null,
   );
-  const [templateVars, setTemplateVars] = useState<string[]>(data.vars ?? []);
-  const [promptText, setPromptText] = useState<string>(data.prompt ?? "");
+  const [templateVars, setTemplateVars] = useState<string[]>(props.data.vars ?? []);
+  const [promptText, setPromptText] = useState<string>(props.data.prompt ?? "");
   const [promptTextOnLastRun, setPromptTextOnLastRun] = useState<string | null>(
     null,
   );
   const [status, setStatus] = useState(Status.NONE);
-  const [numGenerations, setNumGenerations] = useState<number>(data.n ?? 1);
+  const [numGenerations, setNumGenerations] = useState<number>(props.data.n ?? 1);
   const [numGenerationsLastRun, setNumGenerationsLastRun] = useState<number>(
-    data.n ?? 1,
+    props.data.n ?? 1,
   );
 
   // The LLM items container
@@ -248,10 +259,10 @@ const PromptNode: React.FC<PromptNodeProps> = ({
 
   // For continuing with prior LLMs toggle
   const [contWithPriorLLMs, setContWithPriorLLMs] = useState<boolean>(
-    data.contChat !== undefined ? data.contChat : node_type === "chat",
+    props.data.contChat !== undefined ? props.data.contChat : props.type === "chat",
   );
   const [showContToggle, setShowContToggle] = useState<boolean>(
-    node_type === "chat",
+    props.type === "chat",
   );
   const [contToggleDisabled, setContChatToggleDisabled] = useState(false);
 
@@ -303,7 +314,7 @@ const PromptNode: React.FC<PromptNodeProps> = ({
       debounce((_id, _new_items) => {
         setLLMItemsCurrState(_new_items);
         setDataPropsForNode(_id, { llms: _new_items });
-      }, 300)(id, new_items);
+      }, 300)(props.id, new_items);
 
       // If there's been any change to the item list, signal dirty:
       if (
@@ -327,8 +338,8 @@ const PromptNode: React.FC<PromptNodeProps> = ({
 
   const updateShowContToggle = useCallback(
     (pulled_data: Dict<string[] | TemplateVarInfo[]>) => {
-      if (node_type === "chat") return; // always show when chat node
-      const hasPromptInput = getImmediateInputNodeTypes(templateVars, id).some(
+      if (props.type === "chat") return; // always show when chat node
+      const hasPromptInput = getImmediateInputNodeTypes(templateVars, props.id).some(
         (t) => ["prompt", "chat"].includes(t),
       );
       setShowContToggle(
@@ -340,20 +351,20 @@ const PromptNode: React.FC<PromptNodeProps> = ({
       countNumLLMs,
       getImmediateInputNodeTypes,
       templateVars,
-      id,
+      props.id,
     ],
   );
 
   const handleOnConnect = useCallback(() => {
-    if (node_type === "chat") return; // always show when chat node
+    if (props.type === "chat") return; // always show when chat node
     // Re-pull data and update show cont toggle:
     try {
-      const pulled_data = pullInputData(templateVars, id);
+      const pulled_data = pullInputData(templateVars, props.id);
       updateShowContToggle(pulled_data);
     } catch (err) {
       console.error(err);
     }
-  }, [templateVars, id, pullInputData, updateShowContToggle]);
+  }, [templateVars, props.id, pullInputData, updateShowContToggle]);
 
   const refreshTemplateHooks = useCallback(
     (text: string) => {
@@ -361,10 +372,10 @@ const PromptNode: React.FC<PromptNodeProps> = ({
       const found_template_vars = new Set(extractBracketedSubstrings(text)); // gets all strs within braces {} that aren't escaped; e.g., ignores \{this\} but captures {this}
 
       if (!setsAreEqual(found_template_vars, new Set(templateVars))) {
-        if (node_type !== "chat") {
+        if (props.type !== "chat") {
           try {
             updateShowContToggle(
-              pullInputData(Array.from(found_template_vars), id),
+              pullInputData(Array.from(found_template_vars), props.id),
             );
           } catch (err) {
             console.error(err);
@@ -373,7 +384,7 @@ const PromptNode: React.FC<PromptNodeProps> = ({
         setTemplateVars(Array.from(found_template_vars));
       }
     },
-    [setTemplateVars, templateVars, pullInputData, id],
+    [setTemplateVars, templateVars, pullInputData, props.id],
   );
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -381,7 +392,7 @@ const PromptNode: React.FC<PromptNodeProps> = ({
 
     // Store prompt text
     setPromptText(value);
-    data.prompt = value;
+    props.data.prompt = value;
 
     // Update status icon, if need be:
     if (
@@ -400,7 +411,7 @@ const PromptNode: React.FC<PromptNodeProps> = ({
     refreshTemplateHooks(promptText);
 
     // Attempt to grab cache'd responses
-    grabResponses([id])
+    grabResponses([props.id])
       .then(function (resps) {
         if (resps.length > 0) {
           // Store responses and set status to green checkmark
@@ -414,26 +425,26 @@ const PromptNode: React.FC<PromptNodeProps> = ({
   }, []);
 
   // On upstream changes
-  const refresh = useMemo(() => data.refresh, [data.refresh]);
+  const refresh = useMemo(() => props.data.refresh, [props.data.refresh]);
   const refreshLLMList = useMemo(
-    () => data.refreshLLMList,
-    [data.refreshLLMList],
+    () => props.data.refreshLLMList,
+    [props.data.refreshLLMList],
   );
   useEffect(() => {
     if (refresh === true) {
-      setDataPropsForNode(id, { refresh: false });
+      setDataPropsForNode(props.id, { refresh: false });
       setStatus(Status.WARNING);
       handleOnConnect();
     } else if (refreshLLMList === true) {
       llmListContainer?.current?.refreshLLMProviderList();
-      setDataPropsForNode(id, { refreshLLMList: false });
+      setDataPropsForNode(props.id, { refreshLLMList: false });
     }
   }, [refresh, refreshLLMList]);
 
   // Chat nodes only. Pulls input data attached to the 'past conversations' handle.
   // Returns a tuple (past_chat_llms, __past_chats), where both are undefined if nothing is connected.
   const pullInputChats = () => {
-    const pulled_data = pullInputData(["__past_chats"], id);
+    const pulled_data = pullInputData(["__past_chats"], props.id);
     if (!("__past_chats" in pulled_data)) return [undefined, undefined];
 
     // For storing the unique LLMs in past_chats:
@@ -512,8 +523,8 @@ const PromptNode: React.FC<PromptNodeProps> = ({
       llms,
       numGenerations,
       chat_histories,
-      id,
-      node_type !== "chat" ? showContToggle && contWithPriorLLMs : undefined,
+      props.id,
+      props.type !== "chat" ? showContToggle && contWithPriorLLMs : undefined,
     ).then(function (results) {
       return [results.counts, results.total_num_responses] as [
         Dict<Dict<number>>,
@@ -527,7 +538,7 @@ const PromptNode: React.FC<PromptNodeProps> = ({
   const handlePreviewHover = () => {
     // Pull input data and prompt
     try {
-      const pulled_vars = pullInputData(templateVars, id);
+      const pulled_vars = pullInputData(templateVars, props.id);
       updateShowContToggle(pulled_vars);
 
       generatePrompts(promptText, pulled_vars).then((prompts) => {
@@ -559,10 +570,10 @@ const PromptNode: React.FC<PromptNodeProps> = ({
 
     // If this is a chat node, we also need to pull chat histories:
     const [past_chat_llms, pulled_chats] =
-      node_type === "chat" ? pullInputChats() : [undefined, undefined];
+      props.type === "chat" ? pullInputChats() : [undefined, undefined];
     let chat_hist_by_llm: Dict<ChatHistoryInfo[]> | undefined;
 
-    if (node_type === "chat" && contWithPriorLLMs) {
+    if (props.type === "chat" && contWithPriorLLMs) {
       if (past_chat_llms === undefined || pulled_chats === undefined) {
         setRunTooltip("Attach an input to past conversations first.");
         return;
@@ -576,7 +587,7 @@ const PromptNode: React.FC<PromptNodeProps> = ({
     // Pull the input data
     let pulled_vars = {};
     try {
-      pulled_vars = pullInputData(templateVars, id);
+      pulled_vars = pullInputData(templateVars, props.id);
     } catch (err) {
       setRunTooltip("Error: Duplicate variables detected.");
       console.error(err);
@@ -586,7 +597,7 @@ const PromptNode: React.FC<PromptNodeProps> = ({
     updateShowContToggle(pulled_vars);
 
     // Whether to continue with only the prior LLMs, for each value in vars dict
-    if (node_type !== "chat" && showContToggle && contWithPriorLLMs) {
+    if (props.type !== "chat" && showContToggle && contWithPriorLLMs) {
       // We need to draw the LLMs to query from the input responses
       _llmItemsCurrState = getLLMsInPulledInputData(pulled_vars);
     }
@@ -685,7 +696,7 @@ const PromptNode: React.FC<PromptNodeProps> = ({
     // Go through all template hooks (if any) and check they're connected:
     const is_fully_connected = templateVars.every((varname) => {
       // Check that some edge has, as its target, this node and its template hook:
-      return edges.some((e) => e.target === id && e.targetHandle === varname);
+      return edges.some((e) => e.target === props.id && e.targetHandle === varname);
     });
 
     if (!is_fully_connected) {
@@ -695,7 +706,7 @@ const PromptNode: React.FC<PromptNodeProps> = ({
 
     // If this is a chat node, we need to pull chat histories:
     let [past_chat_llms, pulled_chats] =
-      node_type === "chat" ? pullInputChats() : [undefined, undefined];
+      props.type === "chat" ? pullInputChats() : [undefined, undefined];
     let chat_hist_by_llm: Dict<ChatHistoryInfo[]> | undefined;
 
     past_chat_llms = past_chat_llms as (string | LLMSpec)[] | undefined;
@@ -707,7 +718,7 @@ const PromptNode: React.FC<PromptNodeProps> = ({
     // in the input variables (if any). If there's keys present w/o LLMs (for instance a text node),
     // we need to pop-up an error message.
     let _llmItemsCurrState = llmItemsCurrState;
-    if (node_type === "chat" && contWithPriorLLMs) {
+    if (props.type === "chat" && contWithPriorLLMs) {
       // If there's nothing attached to past conversations, we can't continue the chat:
       if (past_chat_llms === undefined || pulled_chats === undefined) {
         triggerAlert(
@@ -751,7 +762,7 @@ Soft failing by replacing undefined with empty strings.`,
     let pulled_data: Dict<(string | TemplateVarInfo)[]> = {};
     try {
       // Try to pull inputs
-      pulled_data = pullInputData(templateVars, id);
+      pulled_data = pullInputData(templateVars, props.id);
     } catch (err) {
       if (showAlert) showAlert((err as Error)?.message ?? err);
       console.error(err);
@@ -761,7 +772,7 @@ Soft failing by replacing undefined with empty strings.`,
     const prompt_template = promptText;
 
     // Whether to continue with only the prior LLMs, for each value in vars dict
-    if (node_type !== "chat" && showContToggle && contWithPriorLLMs) {
+    if (props.type !== "chat" && showContToggle && contWithPriorLLMs) {
       // We need to draw the LLMs to query from the input responses
       _llmItemsCurrState = getLLMsInPulledInputData(pulled_data);
     }
@@ -872,7 +883,7 @@ Soft failing by replacing undefined with empty strings.`,
     // Run all prompt permutations through the LLM to generate + cache responses:
     const query_llms = () => {
       return queryLLM(
-        id,
+        props.id,
         _llmItemsCurrState, // deep clone it first
         numGenerations,
         prompt_template,
@@ -881,7 +892,7 @@ Soft failing by replacing undefined with empty strings.`,
         apiKeys || {},
         false,
         onProgressChange,
-        node_type !== "chat" ? showContToggle && contWithPriorLLMs : undefined,
+        props.type !== "chat" ? showContToggle && contWithPriorLLMs : undefined,
         cancelId,
       ).then(function (json) {
         // We have to early exit explicitly because we will still enter this function even if 'rejected' is called
@@ -906,7 +917,7 @@ Soft failing by replacing undefined with empty strings.`,
           // so we can keep track of 'upstream' LLMs (and plot against them) later on:
           const llm_metavar_key = getUniqueLLMMetavarKey(json_responses);
 
-          setDataPropsForNode(id, {
+          setDataPropsForNode(props.id, {
             fields: json_responses
               .map((resp_obj) =>
                 resp_obj.responses.map((r) => {
@@ -997,7 +1008,7 @@ Soft failing by replacing undefined with empty strings.`,
         setStatus(Status.READY);
 
         // Ping any inspect nodes attached to this node to refresh their contents:
-        pingOutputNodes(id);
+        pingOutputNodes(props.id);
       });
     };
 
@@ -1036,7 +1047,7 @@ Soft failing by replacing undefined with empty strings.`,
         if (n !== numGenerationsLastRun && status === Status.READY)
           setStatus(Status.WARNING);
         setNumGenerations(n);
-        setDataPropsForNode(id, { n });
+        setDataPropsForNode(props.id, { n });
       }
     },
     [numGenerationsLastRun, status],
@@ -1057,7 +1068,7 @@ Soft failing by replacing undefined with empty strings.`,
       // NOTE: This won't work on older browsers, but there's no alternative solution.
       if (!textAreaRef.current && elem && window.ResizeObserver) {
         let past_hooks_y = 138;
-        const incr = 68 + (node_type === "chat" ? -6 : 0);
+        const incr = 68 + (props.type === "chat" ? -6 : 0);
         const observer = new window.ResizeObserver(() => {
           if (!textAreaRef || !textAreaRef.current) return;
           const new_hooks_y = textAreaRef.current.clientHeight + incr;
@@ -1084,25 +1095,74 @@ Soft failing by replacing undefined with empty strings.`,
         text: "Clear cached responses",
         onClick: () => {
           // Clear responses associated with this node
-          clearCachedResponses(id);
+          clearCachedResponses(props.id);
           // Remove items and reset status
           setStatus(Status.NONE);
           setJSONResponses(null);
         },
       },
     ],
-    [id],
+    [props.id],
   );
+
+  // Expose the run method via ref
+  useImperativeHandle(ref, () => ({
+    async run() {
+      try {
+        // If already running, wait
+        if (status === "loading") {
+          await new Promise(resolve => {
+            const checkInterval = setInterval(() => {
+              if (status !== "loading") {
+                clearInterval(checkInterval);
+                resolve(true);
+              }
+            }, 100);
+          });
+        }
+
+        // Get input values from connected nodes
+        const nodes = useStore((state) => state.nodes);
+        const inputValues = await Promise.all(
+          getIncomers(nodes.find(n => n.id === props.id)!, nodes, edges).map(node => 
+            node.data.ref?.current?.getOutput?.()
+          )
+        );
+
+        // Format the prompt with input values
+        const formattedPrompt = formatPromptWithInputs(props.data.prompt, inputValues);
+
+        // Execute the prompt
+        setStatus(Status.LOADING);
+        const results = await executePrompt(formattedPrompt);
+        setStatus(Status.READY);
+        
+        // Store results
+        setJSONResponses(results);
+        
+        return results;
+      } catch (error) {
+        setStatus(Status.READY);
+        throw error;
+      }
+    },
+  }));
+
+  useEffect(() => {
+    // Store ref in node data so pipeline executor can access it
+    const nodeRef = createRef<PromptNodeRef>();
+    props.data.ref = nodeRef;
+  }, []);
 
   return (
     <BaseNode
       classNames="prompt-node"
-      nodeId={id}
+      nodeId={props.id}
       contextMenuExts={customContextMenuItems}
     >
       <NodeLabel
-        title={data.title || node_default_title}
-        nodeId={id}
+        title={props.data.title || node_default_title}
+        nodeId={props.id}
         onEdit={hideStatusIndicator}
         icon={node_icon}
         status={status}
@@ -1143,7 +1203,7 @@ Soft failing by replacing undefined with empty strings.`,
         </Box>
       </Modal>
 
-      {node_type === "chat" ? (
+      {props.type === "chat" ? (
         <div ref={setRef}>
           <ChatHistoryView
             bgColors={["#ccc", "#ceeaf5b1"]}
@@ -1153,7 +1213,7 @@ Soft failing by replacing undefined with empty strings.`,
                 key={0}
                 className="prompt-field-fixed nodrag nowheel"
                 minRows={4}
-                defaultValue={data.prompt}
+                defaultValue={props.data.prompt}
                 onChange={handleInputChange}
                 miw={230}
                 styles={{
@@ -1176,7 +1236,7 @@ Soft failing by replacing undefined with empty strings.`,
           className="prompt-field-fixed nodrag nowheel"
           minRows={4}
           maxRows={12}
-          defaultValue={data.prompt}
+          defaultValue={props.data.prompt}
           onChange={handleInputChange}
         />
       )}
@@ -1190,7 +1250,7 @@ Soft failing by replacing undefined with empty strings.`,
       />
       <TemplateHooks
         vars={templateVars}
-        nodeId={id}
+        nodeId={props.id}
         startY={hooksY}
         position={Position.Left}
         ignoreHandles={["__past_chats"]}
@@ -1207,7 +1267,7 @@ Soft failing by replacing undefined with empty strings.`,
             type="number"
             min={1}
             max={999}
-            defaultValue={data.n || 1}
+            defaultValue={props.data.n || 1}
             onChange={handleNumGenChange}
             className="nodrag"
           ></input>
@@ -1227,7 +1287,7 @@ Soft failing by replacing undefined with empty strings.`,
               onChange={(event) => {
                 setStatus(Status.WARNING);
                 setContWithPriorLLMs(event.currentTarget.checked);
-                setDataPropsForNode(id, {
+                setDataPropsForNode(props.id, {
                   contChat: event.currentTarget.checked,
                 });
               }}
@@ -1243,7 +1303,7 @@ Soft failing by replacing undefined with empty strings.`,
         {!contWithPriorLLMs || !showContToggle ? (
           <LLMListContainer
             ref={llmListContainer}
-            initLLMItems={data.llms}
+            initLLMItems={props.data.llms}
             onItemsChange={onLLMListItemsChange}
           />
         ) : (
@@ -1278,7 +1338,7 @@ Soft failing by replacing undefined with empty strings.`,
             onDrawerClick={() => {
               setShowDrawer(!showDrawer);
               setUninspectedResponses(false);
-              bringNodeToFront(id);
+              bringNodeToFront(props.id);
             }}
           />
         ) : (
@@ -1292,6 +1352,6 @@ Soft failing by replacing undefined with empty strings.`,
       />
     </BaseNode>
   );
-};
+});
 
 export default PromptNode;
