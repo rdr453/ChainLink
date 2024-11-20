@@ -1613,3 +1613,10 @@ export async function loadCachedCustomProviders(): Promise<
       return json.providers as CustomLLMProviderSpec[];
     });
 }
+
+export async function executePrompt(prompt: string): Promise<LLMResponse[]> {
+  // Implement the actual prompt execution logic here
+  // This should return an array of LLMResponse objects
+  // For now, returning empty array as placeholder
+  return [];
+}
